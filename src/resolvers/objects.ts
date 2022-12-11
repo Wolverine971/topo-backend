@@ -1,4 +1,4 @@
-import { IResolvers } from "graphql-tools";
+import { IResolvers } from "@graphql-tools/utils";
 import mongoose from "mongoose";
 
 const Schema = mongoose.Schema;
@@ -10,9 +10,10 @@ export const Data_Object = mongoose.model(
   new Schema({
     id: String,
     name: String,
+    root: Boolean,
     properties: {
       type: Map,
-      of: String,
+      of: Schema.Types.Mixed,
     },
     groups: {
       type: Map,
@@ -24,11 +25,11 @@ export const Data_Object = mongoose.model(
 );
 
 export const ObjectResolvers: IResolvers = {
-  Date: String,
+  // Date: String,
 
   Query: {
     getObjects: async () => {
-      const dataObjects: any = await Data_Object.find({})
+      const dataObjects: any = await Data_Object.find({ root: true })
         .limit(10)
         .sort({ dateCreated: -1 })
         .exec();
@@ -60,11 +61,39 @@ export const ObjectResolvers: IResolvers = {
     properties: async (root, _) => {
       const classTypes: any = await ClassType.find({});
 
-      const promises: any[] = [];
+      // inherit properties from parent class
+      const parentType: any = await ClassType.findOne({
+        name: camelize(root.name),
+      });
       const properties = {};
+      if (!parentType?.properties) {
+        console.log(parentType);
+      }
+      parentType.properties.forEach((value, key) => {
+        const propertyClassType = classTypes.find(
+          (ct) => camelize(ct.name) === key
+        );
+        if (propertyClassType) {
+          properties[key] = {};
+          propertyClassType.properties.forEach((pvalue, pkey) => {
+            if (pvalue === "String") {
+              properties[key][pkey] = value;
+            } else if (pvalue === "Array") {
+              properties[key][pkey] = [];
+            }
+          });
+        } else if (value === "String") {
+          properties[key] = value;
+        } else if (value === "Array") {
+          properties[key] = [];
+        }
+      });
+
+      const promises: any[] = [];
+      // const properties = {};
       root.properties.forEach((value, key) => {
         const propertyClassType = classTypes.find(
-          (ct) => createPropertyName(ct.name) === key
+          (ct) => camelize(ct.name) === key
         );
         if (propertyClassType) {
           const promise = Data_Object.find({ id: value });
@@ -72,13 +101,13 @@ export const ObjectResolvers: IResolvers = {
         } else {
           if (typeof value === "string") {
             properties[key] = value;
-          } else if (value === "Array") {
+          } else if (Array.isArray(value)) {
             properties[key] = value;
           }
         }
       });
       (await Promise.all(promises)).forEach((promise) => {
-        const name = createPropertyName(promise[0].name);
+        const name = camelize(promise[0].name);
         promise[0].properties.forEach((value, key) => {
           if (properties[name]) {
             properties[name][key] = value;
@@ -100,7 +129,7 @@ export const ObjectResolvers: IResolvers = {
       const properties = {};
       root.properties.forEach((value, key, map) => {
         const propertyClassType = classTypes.find(
-          (ct) => createPropertyName(ct.name) === key
+          (ct) => camelize(ct.name) === key
         );
         if (propertyClassType) {
           properties[key] = getClassTypeProperties(propertyClassType);
@@ -121,8 +150,9 @@ export const ObjectResolvers: IResolvers = {
       const classTypes: any = await ClassType.find({});
 
       let o: any = new Data_Object({
-        name,
+        name: camelize(name),
         properties: {},
+        root: true,
         groups: {},
         dateCreated: new Date(),
         dateModified: new Date(),
@@ -131,13 +161,12 @@ export const ObjectResolvers: IResolvers = {
       const objectClassType = classTypes.find((ct) => ct.name === name);
       objectClassType.properties.forEach((value, key, map) => {
         if (value === "String") {
-          const classType = classTypes.find(
-            (ct) => createPropertyName(ct.name) === key
-          );
+          const classType = classTypes.find((ct) => camelize(ct.name) === key);
           if (classType) {
             let po: any = new Data_Object({
-              name: classType.name,
+              name: camelize(classType.name),
               properties: {},
+              root: false,
               groups: {},
               dateCreated: new Date(),
               dateModified: new Date(),
@@ -146,10 +175,10 @@ export const ObjectResolvers: IResolvers = {
               po.properties.set(vkey, properties[key][vkey]);
             });
             po.id = po._id;
-            o.properties.set(createPropertyName(key), po.id);
+            o.properties.set(camelize(key), po.id);
             promises.push(po.save());
           } else {
-            o.properties.set(createPropertyName(key), properties[key]);
+            o.properties.set(camelize(key), properties[key]);
           }
         } else {
           o.groups[key] = value;
@@ -161,28 +190,53 @@ export const ObjectResolvers: IResolvers = {
       return o;
     },
 
-    updateClassType: async (_, { id, name, properties, synonyms }) => {
-      let ct = await ClassType.findOneAndUpdate(
-        {
-          id,
-        },
-        {
-          name,
-          properties,
-          synonyms,
-          dateModified: new Date(),
+    updateObject: async (_, { id, properties }) => {
+      const promises: Promise<any>[] = [];
+      const classTypes: any = await ClassType.find({});
+      let dO: any = await Data_Object.findOne({
+        id,
+      });
+      for await (const key of Object.keys(properties)) {
+        if (typeof properties[key] === "string") {
+          dO.properties.set(camelize(key), properties[key]);
+        } else if (Array.isArray(properties[key])) {
+          // dO.groups[key] = properties;
+          dO.properties.set(camelize(key), properties[key]);
+        } else {
+          const classType = classTypes.find((ct) => camelize(ct.name) === key);
+          if (classType) {
+            let id = dO.properties.get(key);
+            let po: any = await Data_Object.findOne({ id });
+
+            po.properties.forEach((pvalue, pkey, map) => {
+              po.properties.set(pkey, properties[key][pkey]);
+            });
+
+            promises.push(po.save());
+          } else {
+            dO.properties.set(camelize(key), properties[key]);
+          }
         }
-      );
-      return ct;
+      }
+
+      await Promise.all(promises);
+      await dO.save();
+      return dO;
     },
+
     deleteAllObjectTypeById: async (_, { id }) => {
       await Data_Object.deleteMany({ id });
+      return true;
+    },
+    deleteObjectById: async (_, { id }) => {
+      await Data_Object.deleteOne({ id });
       return true;
     },
   },
 };
 
 import { gql } from "apollo-server-express";
+import { camelize, getClassTypeProperties } from "../utils";
 
 export const ObjectTypes = gql`
   extend type Query {
@@ -230,27 +284,6 @@ export const ObjectTypes = gql`
     ): ObjectType!
 
     deleteAllObjectTypeById(id: String): Boolean
+    deleteObjectById(id: String): Boolean
   }
 `;
-
-const createPropertyName = (property: string) => {
-  return property.toLowerCase().replace(" ", "-");
-};
-
-const reversePropertyName = (property: string) => {
-  return property.toLowerCase().replace(" ", "-");
-};
-
-const getClassTypeProperties = (classType) => {
-  let blankClassType = {};
-  classType.properties.forEach((value, key, map) => {
-    if (value === "String") {
-      //   properties[key] = "";
-      blankClassType[key] = "";
-    } else if (classType.properties[key] === "Array") {
-      //   properties[key] = [];
-      blankClassType[key] = [];
-    }
-  });
-  return blankClassType;
-};

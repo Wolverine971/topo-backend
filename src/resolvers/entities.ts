@@ -1,4 +1,4 @@
-import { IResolvers } from "graphql-tools";
+import { IResolvers } from "@graphql-tools/utils";
 import mongoose from "mongoose";
 
 const Schema = mongoose.Schema;
@@ -60,7 +60,6 @@ export const EntityType = mongoose.model(
 );
 
 export const EntityResolvers: IResolvers = {
-  Date: String,
   Query: {
     nodes: async () => Node.find({}),
     getNode: async (nodeId) => Node.findOne({ id: nodeId }),

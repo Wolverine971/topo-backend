@@ -1,4 +1,4 @@
-import { IResolvers } from "graphql-tools";
+import { IResolvers } from "@graphql-tools/utils";
 import mongoose from "mongoose";
 
 const Schema = mongoose.Schema;
@@ -19,8 +19,6 @@ export const ClassType = mongoose.model(
 );
 
 export const ClassTypeResolvers: IResolvers = {
-  Date: String,
-
   Query: {
     getClassTypes: async () => {
       const classTypes = await ClassType.find({})
@@ -73,17 +71,21 @@ export const ClassTypeResolvers: IResolvers = {
   Mutation: {
     createClassType: async (_, { name, properties, synonyms }) => {
       let ct: any = new ClassType({
-        name,
+        name: camelize(name),
         properties: {},
         synonyms,
         dateCreated: new Date(),
         dateModified: new Date(),
       });
+
+      // await generateNewClassType({ name, properties, synonyms });
+
       properties.forEach((p) => {
-        ct.properties.set(createPropertyName(p.name), p.type);
+        ct.properties.set(camelize(p.name), p.type);
       });
       ct.id = ct._id;
       await ct.save();
+      await updateClasses();
       return ct;
     },
 
@@ -93,14 +95,17 @@ export const ClassTypeResolvers: IResolvers = {
           id,
         },
         {
-          name,
-          properties: {},
+          name: camelize(name),
           synonyms,
           dateModified: new Date(),
         }
       );
       properties.forEach((p) => {
-        ct.properties.set(createPropertyName(p.name), p.type);
+        const exists = ct.properties.get(p.name);
+        if (!exists) {
+          const newName = camelize(p.name);
+          ct.properties.set(newName, p.type);
+        }
       });
       await ct.save();
       return ct;
@@ -113,6 +118,7 @@ export const ClassTypeResolvers: IResolvers = {
 };
 
 import { gql } from "apollo-server-express";
+import { camelize, generateNewClassType, updateClasses } from "../utils";
 
 export const ClassTypes = gql`
   extend type Query {
@@ -151,7 +157,3 @@ export const ClassTypes = gql`
     deleteAllClassTypeById(id: String): Boolean
   }
 `;
-
-const createPropertyName = (property: string) => {
-  return property.toLowerCase().replace(" ", "-");
-};
